@@ -17,6 +17,7 @@ echo "引数: $@"
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 CONFIG_FILE="${SCRIPT_DIR}/config.sh"
 MOUNTED_DEVICE_PATH=""
+LOCAL_ONLY=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -28,6 +29,11 @@ while [[ $# -gt 0 ]]; do
                 echo "エラー: --config オプションの後にパスが必要です" >&2
                 exit 1
             fi
+            ;;
+        --local-only)
+            # Issue #3: デバイス探索をスキップし、ローカル音声のみ処理する
+            LOCAL_ONLY=1
+            shift
             ;;
         *)
             if [[ -z "$MOUNTED_DEVICE_PATH" ]]; then
@@ -46,14 +52,19 @@ else
     exit 1
 fi
 
-if [ -z "$MOUNTED_DEVICE_PATH" ]; then
+if [ -z "$MOUNTED_DEVICE_PATH" ] && [ $LOCAL_ONLY -eq 0 ]; then
     echo "エラー: マウントされたUSBデバイスのパスが指定されていません。" >&2
-    echo "使用法: $0 <マウントパス> [--config <設定ファイル>]" >&2
+    echo "使用法: $0 <マウントパス> [--config <設定ファイル>] または $0 --local-only [--config <設定ファイル>]" >&2
     exit 1
 fi
 
-echo "マウントパス: $MOUNTED_DEVICE_PATH"
+if [ $LOCAL_ONLY -eq 1 ]; then
+    echo "ローカルオンリーモード: デバイス探索をスキップします。"
+else
+    echo "マウントパス: $MOUNTED_DEVICE_PATH"
+fi
 
+if [ $LOCAL_ONLY -eq 0 ]; then
 # --- 検索対象パスの決定 ---
 SEARCH_PATH="$MOUNTED_DEVICE_PATH"
 if [ -n "$VOICE_FILES_SUBDIR" ]; then
@@ -74,6 +85,7 @@ while [ ! -d "$SEARCH_PATH" ]; do
     RETRY_COUNT=$((RETRY_COUNT + 1))
 done
 echo "$SEARCH_PATH 準備完了。"
+fi
 
 # --- ディレクトリ作成 ---
 mkdir -p "${AUDIO_DEST_DIR}"
@@ -92,6 +104,7 @@ AUDIO_DONE_DIR="${AUDIO_DEST_DIR}/done"
 mkdir -p "${AUDIO_DONE_DIR}"
 echo "完了ファイル保存先ディレクトリを確認/作成しました: ${AUDIO_DONE_DIR}"
 
+if [ $LOCAL_ONLY -eq 0 ]; then
 # --- 音声ファイルの検索 ---
 echo "指定されたパスから音声ファイルを検索します: $SEARCH_PATH"
 echo "検索拡張子 (配列): ${TARGET_EXTENSIONS_ARRAY[@]}"
@@ -159,6 +172,9 @@ for audio_file_full_path in "${AUDIO_FILES[@]}"; do
         echo "ファイルの移動に成功しました。"
     fi
 done # 個別ファイル移動ループの終了
+else
+    echo "ローカルオンリーモード: デバイスからの移動をスキップし、${AUDIO_DEST_DIR} 内の未処理ファイルを処理します。"
+fi
 
 # --- Pythonスクリプトの呼び出し (AUDIO_DEST_DIR を対象とする) ---
 # 個別ファイルごとではなく、一度だけ呼び出すように変更
@@ -179,9 +195,21 @@ python3 "$abs_python_script_path" \
 python_exit_code=$?
 if [ $python_exit_code -eq 0 ]; then
     echo "Pythonスクリプトの実行に成功しました。"
+    # Issue #2: 取り込み完了フラグを作成する
+    # (applaud_resume_after_reboot.sh がこのフラグを確認してから pCloud 退避を起動する)
+    INGEST_FLAG_PATH="${APPLAUD_INGEST_FLAG:-${SCRIPT_DIR}/../.ai-agent/tmp/applaud_ingest_done.flag}"
+    mkdir -p "$(dirname "$INGEST_FLAG_PATH")"
+    touch "$INGEST_FLAG_PATH"
+    echo "取り込み完了フラグを作成しました: $INGEST_FLAG_PATH"
 else
     echo "エラー: Pythonスクリプトの実行に失敗しました。(終了コード: $python_exit_code)" >&2
 fi
 
 echo "\n全ての処理が完了しました。"
+
+# ローカルオンリーモードでは呼び出し元 (resume スクリプト) が成否を判定できるよう
+# Pythonスクリプトの終了コードを伝播する。通常モードは従来どおり 0 で終了する。
+if [ $LOCAL_ONLY -eq 1 ]; then
+    exit $python_exit_code
+fi
 exit 0 

@@ -19,3 +19,5 @@ debug/processed_log.jsonl
 # Documents - typically should be version controlled
 # document/tree.txt
 # document/task.md
+# AppLaud ingest-complete flag (runtime artifact, Issue #2)
+.ai-agent/tmp/applaud_ingest_done.flag
